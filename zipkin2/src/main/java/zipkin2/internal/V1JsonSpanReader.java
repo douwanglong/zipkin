@@ -33,7 +33,6 @@ public final class V1JsonSpanReader implements JsonReaderAdapter<V1Span> {
       builder.clear();
     }
     reader.beginObject();
-    String name = ""; // tolerate missing name
     while (reader.hasNext()) {
       String nextName = reader.nextName();
       if (nextName.equals("traceId")) {
@@ -49,7 +48,7 @@ public final class V1JsonSpanReader implements JsonReaderAdapter<V1Span> {
 
       // read any optional fields
       if (nextName.equals("name")) {
-        name = reader.nextString();
+        builder.name(reader.nextString());
       } else if (nextName.equals("parentId")) {
         builder.parentId(reader.nextString());
       } else if (nextName.equals("timestamp")) {
@@ -71,7 +70,7 @@ public final class V1JsonSpanReader implements JsonReaderAdapter<V1Span> {
       }
     }
     reader.endObject();
-    return builder.name(name).build();
+    return builder.build();
   }
 
   void readAnnotation(JsonReader reader) throws IOException {
