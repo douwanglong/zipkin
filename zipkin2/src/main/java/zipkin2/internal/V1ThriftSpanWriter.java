@@ -14,13 +14,14 @@
 package zipkin2.internal;
 
 import java.util.List;
-import java.util.Map;
-import zipkin2.Annotation;
 import zipkin2.Endpoint;
 import zipkin2.Span;
+import zipkin2.v1.V1Annotation;
+import zipkin2.v1.V1BinaryAnnotation;
+import zipkin2.v1.V1Span;
+import zipkin2.v1.V1SpanConverter;
 
 import static zipkin2.internal.Buffer.utf8SizeInBytes;
-import static zipkin2.internal.HexCodec.lowerHexToUnsignedLong;
 import static zipkin2.internal.ThriftField.TYPE_BOOL;
 import static zipkin2.internal.ThriftField.TYPE_I32;
 import static zipkin2.internal.ThriftField.TYPE_I64;
@@ -47,168 +48,111 @@ public final class V1ThriftSpanWriter implements Buffer.Writer<Span> {
 
   @Override
   public int sizeInBytes(Span value) {
-    V1Metadata md = V1Metadata.parse(value);
+    V1Span v1Span = V1SpanConverter.convert(value);
 
     int endpointSize =
         value.localEndpoint() != null ? ThriftEndpointCodec.sizeInBytes(value.localEndpoint()) : 0;
 
     int sizeInBytes = 3 + 8; // TRACE_ID
-    if (value.traceId().length() == 32) sizeInBytes += 3 + 8; // TRACE_ID_HIGH
-    if (value.parentId() != null) sizeInBytes += 3 + 8; // PARENT_ID
+    if (v1Span.traceIdHigh() != 0) sizeInBytes += 3 + 8; // TRACE_ID_HIGH
+    if (v1Span.parentId() != 0) sizeInBytes += 3 + 8; // PARENT_ID
     sizeInBytes += 3 + 8; // ID
     sizeInBytes += 3 + 4; // NAME
     if (value.name() != null) sizeInBytes += utf8SizeInBytes(value.name());
 
     // we write list thriftFields even when empty to match finagle serialization
     sizeInBytes += 3 + 5; // ANNOTATION field + list overhead
-    int annotationsSizeInBytes = annotationsSizeInBytes(value, md, endpointSize);
-    sizeInBytes += annotationsSizeInBytes;
-    sizeInBytes += 3 + 5; // BINARY_ANNOTATION field + list overhead
-    sizeInBytes +=
-        binaryAnnotationsSizeInBytes(value, md, annotationsSizeInBytes != 0, endpointSize);
-
-    if (Boolean.TRUE.equals(value.debug())) sizeInBytes += 3 + 1; // DEBUG
-
-    // Don't report timestamp and duration on shared spans (should be server, but not necessarily)
-    if (!Boolean.TRUE.equals(value.shared())) {
-      if (value.timestampAsLong() != 0L) sizeInBytes += 3 + 8; // TIMESTAMP
-      if (value.durationAsLong() != 0L) sizeInBytes += 3 + 8; // DURATION
-    }
-    sizeInBytes++; // TYPE_STOP
-    return sizeInBytes;
-  }
-
-  static int annotationsSizeInBytes(Span value, V1Metadata md, int endpointSize) {
-    int sizeInBytes = 0;
-    if (md.startTs != 0L && md.begin != null) {
-      sizeInBytes += ThriftAnnotationWriter.sizeInBytes(2, endpointSize);
-    }
-
-    if (md.endTs != 0L && md.end != null) {
-      sizeInBytes += ThriftAnnotationWriter.sizeInBytes(2, endpointSize);
-    }
-
-    for (int i = 0, length = value.annotations().size(); i < length; i++) {
-      int valueSize = utf8SizeInBytes(value.annotations().get(i).value());
+    for (int i = 0, length = v1Span.annotations().size(); i < length; i++) {
+      int valueSize = utf8SizeInBytes(v1Span.annotations().get(i).value());
       sizeInBytes += ThriftAnnotationWriter.sizeInBytes(valueSize, endpointSize);
     }
-    return sizeInBytes;
-  }
 
-  static int binaryAnnotationsSizeInBytes(
-      Span value, V1Metadata md, boolean wroteAnnotations, int endpointSize) {
-    int sizeInBytes = 0;
-    for (Map.Entry<String, String> tag : value.tags().entrySet()) {
-      int keySize = utf8SizeInBytes(tag.getKey());
-      int valueSize = utf8SizeInBytes(tag.getValue());
-      sizeInBytes += ThriftBinaryAnnotationWriter.sizeInBytes(keySize, valueSize, endpointSize);
+    sizeInBytes += 3 + 5; // BINARY_ANNOTATION field + list overhead
+    for (int i = 0, length = v1Span.binaryAnnotations().size(); i < length; i++) {
+      V1BinaryAnnotation b = v1Span.binaryAnnotations().get(i);
+      int keySize = utf8SizeInBytes(b.key());
+      if (b.stringValue() != null) {
+        int valueSize = utf8SizeInBytes(b.stringValue());
+        sizeInBytes += ThriftBinaryAnnotationWriter.sizeInBytes(keySize, valueSize, endpointSize);
+      } else {
+        int remoteEndpointSize = ThriftEndpointCodec.sizeInBytes(b.endpoint());
+        sizeInBytes += ThriftBinaryAnnotationWriter.sizeInBytes(keySize, 1, remoteEndpointSize);
+      }
     }
-    if (!wroteAnnotations
-        && sizeInBytes == 0
-        && endpointSize != 0) { // size of empty "lc" binary annotation
-      sizeInBytes += ThriftBinaryAnnotationWriter.sizeInBytes(2, 0, endpointSize);
-    }
-    if (md.remoteEndpointType != null && value.remoteEndpoint() != null) {
-      int remoteEndpointSize = ThriftEndpointCodec.sizeInBytes(value.remoteEndpoint());
-      sizeInBytes += ThriftBinaryAnnotationWriter.sizeInBytes(2, 1, remoteEndpointSize);
-    }
+
+    if (Boolean.TRUE.equals(v1Span.debug())) sizeInBytes += 3 + 1; // DEBUG
+    if (v1Span.timestamp() != 0L) sizeInBytes += 3 + 8; // TIMESTAMP
+    if (v1Span.duration() != 0L) sizeInBytes += 3 + 8; // DURATION
+
+    sizeInBytes++; // TYPE_STOP
     return sizeInBytes;
   }
 
   @Override
   public void write(Span value, Buffer buffer) {
-    V1Metadata md = V1Metadata.parse(value);
+    V1Span v1Span = V1SpanConverter.convert(value);
     byte[] endpointBytes = legacyEndpointBytes(value.localEndpoint());
 
     TRACE_ID.write(buffer);
-    ThriftCodec.writeLong(buffer, lowerHexToUnsignedLong(value.traceId()));
+    ThriftCodec.writeLong(buffer, v1Span.traceId());
 
     NAME.write(buffer);
     ThriftCodec.writeLengthPrefixed(buffer, value.name() != null ? value.name() : "");
 
     ID.write(buffer);
-    ThriftCodec.writeLong(buffer, lowerHexToUnsignedLong(value.id()));
+    ThriftCodec.writeLong(buffer, v1Span.id());
 
-    if (value.parentId() != null) {
+    if (v1Span.parentId() != 0L) {
       PARENT_ID.write(buffer);
-      ThriftCodec.writeLong(buffer, lowerHexToUnsignedLong(value.parentId()));
+      ThriftCodec.writeLong(buffer, v1Span.parentId());
     }
 
     // we write list thriftFields even when empty to match finagle serialization
     ANNOTATIONS.write(buffer);
-    boolean wroteAnnotations = writeAnnotations(value, md, endpointBytes, buffer);
-    BINARY_ANNOTATIONS.write(buffer);
-    writeBinaryAnnotations(value, md, wroteAnnotations, endpointBytes, buffer);
+    writeAnnotations(buffer, v1Span, endpointBytes);
 
-    if (Boolean.TRUE.equals(value.debug())) {
+    BINARY_ANNOTATIONS.write(buffer);
+    writeBinaryAnnotations(buffer, v1Span, endpointBytes);
+
+    if (Boolean.TRUE.equals(v1Span.debug())) {
       DEBUG.write(buffer);
       buffer.writeByte(1);
     }
 
-    if (!Boolean.TRUE.equals(value.shared())) {
-      if (value.timestampAsLong() != 0L) {
-        TIMESTAMP.write(buffer);
-        ThriftCodec.writeLong(buffer, value.timestampAsLong());
-      }
-      if (value.durationAsLong() != 0L) {
-        DURATION.write(buffer);
-        ThriftCodec.writeLong(buffer, value.durationAsLong());
-      }
+    if (v1Span.timestamp() != 0L) {
+      TIMESTAMP.write(buffer);
+      ThriftCodec.writeLong(buffer, v1Span.timestamp());
+    }
+    if (v1Span.duration() != 0L) {
+      DURATION.write(buffer);
+      ThriftCodec.writeLong(buffer, v1Span.duration());
     }
 
-    if (value.traceId().length() == 32) {
+    if (v1Span.traceIdHigh() != 0L) {
       TRACE_ID_HIGH.write(buffer);
-      ThriftCodec.writeLong(buffer, lowerHexToUnsignedLong(value.traceId(), 0));
+      ThriftCodec.writeLong(buffer, v1Span.traceIdHigh());
     }
 
     buffer.writeByte(TYPE_STOP);
   }
 
-  void writeBinaryAnnotations(
-      Span value, V1Metadata md, boolean wroteAnnotations, byte[] endpointBytes, Buffer buffer) {
-    int binaryAnnotationCount = value.tags().size();
-    boolean writeLocalComponent =
-        !wroteAnnotations && endpointBytes != null && binaryAnnotationCount == 0;
-    if (writeLocalComponent) binaryAnnotationCount++;
-
-    boolean hasRemoteEndpoint = md.remoteEndpointType != null && value.remoteEndpoint() != null;
-    if (hasRemoteEndpoint) binaryAnnotationCount++;
-
-    ThriftCodec.writeListBegin(buffer, binaryAnnotationCount);
-
-    for (Map.Entry<String, String> entry : value.tags().entrySet()) {
-      ThriftBinaryAnnotationWriter.write(
-          entry.getKey(), entry.getValue(), false, endpointBytes, buffer);
-    }
-    // write an empty "lc" annotation to avoid missing the localEndpoint in an in-process span
-    if (writeLocalComponent) {
-      ThriftBinaryAnnotationWriter.write("lc", "", false, endpointBytes, buffer);
-    }
-    if (hasRemoteEndpoint) {
-      byte[] remoteEndpointBytes = legacyEndpointBytes(value.remoteEndpoint());
-      ThriftBinaryAnnotationWriter.write(
-          md.remoteEndpointType, null, true, remoteEndpointBytes, buffer);
+  static void writeAnnotations(Buffer buffer, V1Span v1Span, byte[] endpointBytes) {
+    int annotationCount = v1Span.annotations().size();
+    ThriftCodec.writeListBegin(buffer, annotationCount);
+    for (int i = 0; i < annotationCount; i++) {
+      V1Annotation a = v1Span.annotations().get(i);
+      ThriftAnnotationWriter.write(a.timestamp(), a.value(), endpointBytes, buffer);
     }
   }
 
-  boolean writeAnnotations(Span value, V1Metadata md, byte[] endpointBytes, Buffer buffer) {
-    int annotationCount = value.annotations().size();
-    boolean beginAnnotation = md.startTs != 0L && md.begin != null;
-    if (beginAnnotation) annotationCount++;
-    boolean endAnnotation = md.endTs != 0L && md.end != null;
-    if (endAnnotation) annotationCount++;
-    ThriftCodec.writeListBegin(buffer, annotationCount);
-    if (beginAnnotation) {
-      ThriftAnnotationWriter.write(md.startTs, md.begin, endpointBytes, buffer);
+  static void writeBinaryAnnotations(Buffer buffer, V1Span v1Span, byte[] endpointBytes) {
+    int binaryAnnotationCount = v1Span.binaryAnnotations().size();
+    ThriftCodec.writeListBegin(buffer, binaryAnnotationCount);
+    for (int i = 0; i < binaryAnnotationCount; i++) {
+      V1BinaryAnnotation a = v1Span.binaryAnnotations().get(i);
+      byte[] ep = a.stringValue() != null ? endpointBytes : legacyEndpointBytes(a.endpoint());
+      ThriftBinaryAnnotationWriter.write(a.key(), a.stringValue(), a.booleanValue(), ep, buffer);
     }
-    for (int i = 0, length = value.annotations().size(); i < length; i++) {
-      Annotation a = value.annotations().get(i);
-      ThriftAnnotationWriter.write(a.timestamp(), a.value(), endpointBytes, buffer);
-    }
-    if (endAnnotation) {
-      ThriftAnnotationWriter.write(md.endTs, md.end, endpointBytes, buffer);
-    }
-    return annotationCount > 0;
   }
 
   @Override

@@ -30,9 +30,9 @@ public final class V1BinaryAnnotation implements Comparable<V1BinaryAnnotation> 
   public static int TYPE_STRING = 6;
 
   /** Creates an address annotation, which is the same as {@link Span#remoteEndpoint()} */
-  public static V1BinaryAnnotation createAddress(String key, Endpoint endpoint) {
+  public static V1BinaryAnnotation createAddress(String address, Endpoint endpoint) {
     if (endpoint == null) throw new NullPointerException("endpoint == null");
-    return new V1BinaryAnnotation(key, null, true, endpoint);
+    return new V1BinaryAnnotation(address, null, true, endpoint);
   }
 
   /**

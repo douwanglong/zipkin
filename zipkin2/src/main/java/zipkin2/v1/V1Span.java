@@ -14,13 +14,14 @@
 package zipkin2.v1;
 
 import java.util.ArrayList;
-import java.util.Arrays;
 import java.util.Collections;
 import java.util.List;
 import java.util.Locale;
+import zipkin2.Endpoint;
 import zipkin2.Span;
 import zipkin2.internal.Nullable;
 
+import static java.util.Collections.unmodifiableList;
 import static zipkin2.internal.HexCodec.lowerHexToUnsignedLong;
 
 /** V1 spans are different than v2 especially as annotations repeat. */
@@ -100,12 +101,21 @@ public final class V1Span {
     this.parentId = builder.parentId;
     this.timestamp = builder.timestamp;
     this.duration = builder.duration;
-    this.annotations = sortedList(builder.annotations);
-    this.binaryAnnotations = sortedList(builder.binaryAnnotations);
+    if (builder.annotations != null) {
+      Collections.sort(builder.annotations);
+      this.annotations = unmodifiableList(new ArrayList<>(builder.annotations));
+    } else {
+      this.annotations = Collections.emptyList();
+    }
+    if (builder.binaryAnnotations != null) {
+      this.binaryAnnotations = unmodifiableList(new ArrayList<>(builder.binaryAnnotations));
+    } else {
+      this.binaryAnnotations = Collections.emptyList();
+    }
     this.debug = builder.debug;
   }
 
-  public static Builder builder() {
+  public static Builder newBuilder() {
     return new Builder();
   }
 
@@ -199,16 +209,31 @@ public final class V1Span {
     }
 
     /** @see V1Span#annotations() */
-    public Builder addAnnotation(V1Annotation annotation) {
+    public Builder addAnnotation(long timestamp, String value, @Nullable Endpoint endpoint) {
       if (annotations == null) annotations = new ArrayList<>(4);
-      annotations.add(annotation);
+      annotations.add(new V1Annotation(timestamp, value, endpoint));
       return this;
     }
 
-    /** @see V1Span#binaryAnnotations() */
-    public Builder addBinaryAnnotation(V1BinaryAnnotation binaryAnnotation) {
+    /** Creates an address annotation, which is the same as {@link Span#remoteEndpoint()} */
+    public Builder addBinaryAnnotation(String address, Endpoint endpoint) {
+      if (endpoint == null) throw new NullPointerException("endpoint == null");
       if (binaryAnnotations == null) binaryAnnotations = new ArrayList<>(4);
-      binaryAnnotations.add(binaryAnnotation);
+      binaryAnnotations.add(new V1BinaryAnnotation(address, null, true, endpoint));
+      return this;
+    }
+
+    /**
+     * Creates a tag annotation, which is the same as {@link Span#tags()} except duplicating the
+     * endpoint.
+     *
+     * <p>A special case is when the key is "lc" and value is empty: This substitutes for the {@link
+     * Span#localEndpoint()}.
+     */
+    public Builder addBinaryAnnotation(String key, String value, Endpoint endpoint) {
+      if (value == null) throw new NullPointerException("value == null");
+      if (binaryAnnotations == null) binaryAnnotations = new ArrayList<>(4);
+      binaryAnnotations.add(new V1BinaryAnnotation(key, value, false, endpoint));
       return this;
     }
 
@@ -221,14 +246,5 @@ public final class V1Span {
     public V1Span build() {
       return new V1Span(this);
     }
-  }
-
-  static <T extends Comparable<? super T>> List<T> sortedList(@Nullable List<T> in) {
-    if (in == null || in.isEmpty()) return Collections.emptyList();
-    if (in.size() == 1) return Collections.singletonList(in.get(0));
-    Object[] array = in.toArray();
-    Arrays.sort(array);
-    List result = Arrays.asList(array);
-    return Collections.unmodifiableList(result);
   }
 }

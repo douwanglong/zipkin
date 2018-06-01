@@ -15,8 +15,6 @@ package zipkin2.internal;
 
 import java.nio.ByteBuffer;
 import zipkin2.Endpoint;
-import zipkin2.v1.V1Annotation;
-import zipkin2.v1.V1BinaryAnnotation;
 import zipkin2.v1.V1Span;
 
 import static zipkin2.internal.ThriftCodec.UTF_8;
@@ -41,11 +39,11 @@ import static zipkin2.internal.V1ThriftSpanWriter.TRACE_ID;
 import static zipkin2.internal.V1ThriftSpanWriter.TRACE_ID_HIGH;
 
 public final class V1ThriftSpanReader {
-  V1Span.Builder builder = V1Span.builder();
+  V1Span.Builder builder = V1Span.newBuilder();
 
   public V1Span read(ByteBuffer bytes) {
     if (builder == null) {
-      builder = V1Span.builder();
+      builder = V1Span.newBuilder();
     } else {
       builder.clear();
     }
@@ -69,12 +67,12 @@ public final class V1ThriftSpanReader {
       } else if (thriftField.isEqualTo(ANNOTATIONS)) {
         int length = readListLength(bytes);
         for (int i = 0; i < length; i++) {
-          builder.addAnnotation(AnnotationReader.read(bytes));
+          AnnotationReader.read(bytes, builder);
         }
       } else if (thriftField.isEqualTo(BINARY_ANNOTATIONS)) {
         int length = readListLength(bytes);
         for (int i = 0; i < length; i++) {
-          builder.addBinaryAnnotation(BinaryAnnotationReader.read(bytes));
+          BinaryAnnotationReader.read(bytes, builder);
         }
       } else if (thriftField.isEqualTo(DEBUG)) {
         builder.debug(bytes.get() == 1);
@@ -95,7 +93,7 @@ public final class V1ThriftSpanReader {
     static final ThriftField VALUE = new ThriftField(TYPE_STRING, 2);
     static final ThriftField ENDPOINT = new ThriftField(TYPE_STRUCT, 3);
 
-    static V1Annotation read(ByteBuffer bytes) {
+    static void read(ByteBuffer bytes, V1Span.Builder builder) {
       long timestamp = 0;
       String value = null;
       Endpoint endpoint = null;
@@ -116,8 +114,8 @@ public final class V1ThriftSpanReader {
         }
       }
 
-      if (timestamp == 0 || value == null) return null;
-      return V1Annotation.create(timestamp, value, endpoint);
+      if (timestamp == 0 || value == null) return;
+      builder.addAnnotation(timestamp, value, endpoint);
     }
   }
 
@@ -127,7 +125,7 @@ public final class V1ThriftSpanReader {
     static final ThriftField TYPE = new ThriftField(TYPE_I32, 3);
     static final ThriftField ENDPOINT = new ThriftField(TYPE_STRUCT, 4);
 
-    static V1BinaryAnnotation read(ByteBuffer bytes) {
+    static void read(ByteBuffer bytes, V1Span.Builder builder) {
       String key = null;
       byte[] value = null;
       Endpoint endpoint = null;
@@ -156,14 +154,12 @@ public final class V1ThriftSpanReader {
           skip(bytes, thriftField.type);
         }
       }
-      if (value == null) return null;
+      if (value == null) return;
       if (isString) {
-        return V1BinaryAnnotation.createString(key, new String(value, UTF_8), endpoint);
+        builder.addBinaryAnnotation(key, new String(value, UTF_8), endpoint);
+      } else if (isBoolean && value.length == 1 && value[0] == 1 && endpoint != null) {
+        builder.addBinaryAnnotation(key, endpoint);
       }
-      if (isBoolean && value.length == 1 && value[0] == 1 && endpoint != null) {
-        return V1BinaryAnnotation.createAddress(key, endpoint);
-      }
-      return null; // toss unsupported data
     }
   }
 }

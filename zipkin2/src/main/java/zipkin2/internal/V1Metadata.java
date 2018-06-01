@@ -17,14 +17,14 @@ import zipkin2.Span;
 
 public final class V1Metadata {
   public final long startTs, endTs;
-  public final String begin, end, remoteEndpointType;
+  public final String begin, end, addr;
 
-  V1Metadata(long startTs, long endTs, String begin, String end, String remoteEndpointType) {
+  V1Metadata(long startTs, long endTs, String begin, String end, String addr) {
     this.startTs = startTs;
     this.endTs = endTs;
     this.begin = begin;
     this.end = end;
-    this.remoteEndpointType = remoteEndpointType;
+    this.addr = addr;
   }
 
   public static V1Metadata parse(Span in) {

@@ -17,9 +17,9 @@ import java.io.IOException;
 import zipkin2.Endpoint;
 import zipkin2.internal.JsonCodec.JsonReader;
 import zipkin2.internal.JsonCodec.JsonReaderAdapter;
-import zipkin2.v1.V1Annotation;
-import zipkin2.v1.V1BinaryAnnotation;
 import zipkin2.v1.V1Span;
+
+import static zipkin2.internal.V2SpanReader.ENDPOINT_READER;
 
 public final class V1JsonSpanReader implements JsonReaderAdapter<V1Span> {
 
@@ -28,7 +28,7 @@ public final class V1JsonSpanReader implements JsonReaderAdapter<V1Span> {
   @Override
   public V1Span fromJson(JsonReader reader) throws IOException {
     if (builder == null) {
-      builder = V1Span.builder();
+      builder = V1Span.newBuilder();
     } else {
       builder.clear();
     }
@@ -58,36 +58,11 @@ public final class V1JsonSpanReader implements JsonReaderAdapter<V1Span> {
         builder.duration(reader.nextLong());
       } else if (nextName.equals("annotations")) {
         reader.beginArray();
-        while (reader.hasNext()) {
-          reader.beginObject();
-          Long timestamp = null;
-          String value = null;
-          Endpoint endpoint = null;
-          while (reader.hasNext()) {
-            nextName = reader.nextName();
-            if (nextName.equals("timestamp")) {
-              timestamp = reader.nextLong();
-            } else if (nextName.equals("value")) {
-              value = reader.nextString();
-            } else if (nextName.equals("endpoint") && !reader.peekNull()) {
-              endpoint = ENDPOINT_READER.fromJson(reader);
-            } else {
-              reader.skipValue();
-            }
-          }
-          if (timestamp == null || value == null) {
-            throw new IllegalArgumentException("Incomplete annotation at " + reader.getPath());
-          }
-          reader.endObject();
-          builder.addAnnotation(V1Annotation.create(timestamp, value, endpoint));
-        }
+        while (reader.hasNext()) readAnnotation(reader);
         reader.endArray();
       } else if (nextName.equals("binaryAnnotations")) {
         reader.beginArray();
-        while (reader.hasNext()) {
-          V1BinaryAnnotation b = readBinaryAnnotation(reader);
-          if (b != null) builder.addBinaryAnnotation(b);
-        }
+        while (reader.hasNext()) readBinaryAnnotation(reader);
         reader.endArray();
       } else if (nextName.equals("debug")) {
         if (reader.nextBoolean()) builder.debug(true);
@@ -99,12 +74,37 @@ public final class V1JsonSpanReader implements JsonReaderAdapter<V1Span> {
     return builder.name(name).build();
   }
 
+  void readAnnotation(JsonReader reader) throws IOException {
+    String nextName;
+    reader.beginObject();
+    Long timestamp = null;
+    String value = null;
+    Endpoint endpoint = null;
+    while (reader.hasNext()) {
+      nextName = reader.nextName();
+      if (nextName.equals("timestamp")) {
+        timestamp = reader.nextLong();
+      } else if (nextName.equals("value")) {
+        value = reader.nextString();
+      } else if (nextName.equals("endpoint") && !reader.peekNull()) {
+        endpoint = ENDPOINT_READER.fromJson(reader);
+      } else {
+        reader.skipValue();
+      }
+    }
+    if (timestamp == null || value == null) {
+      throw new IllegalArgumentException("Incomplete annotation at " + reader.getPath());
+    }
+    reader.endObject();
+    builder.addAnnotation(timestamp, value, endpoint);
+  }
+
   @Override
   public String toString() {
     return "Span";
   }
 
-  static V1BinaryAnnotation readBinaryAnnotation(JsonReader reader) throws IOException {
+  void readBinaryAnnotation(JsonReader reader) throws IOException {
     String key = null;
     Endpoint endpoint = null;
     Boolean booleanValue = null;
@@ -141,47 +141,9 @@ public final class V1JsonSpanReader implements JsonReaderAdapter<V1Span> {
     reader.endObject();
 
     if (stringValue != null) {
-      return V1BinaryAnnotation.createString(key, stringValue, endpoint);
+      builder.addBinaryAnnotation(key, stringValue, endpoint);
+    } else if (booleanValue != null && booleanValue && endpoint != null) {
+      builder.addBinaryAnnotation(key, endpoint);
     }
-    if (booleanValue != null && booleanValue && endpoint != null) {
-      return V1BinaryAnnotation.createAddress(key, endpoint);
-    }
-    return null; // toss unsupported data
   }
-
-  static final JsonReaderAdapter<Endpoint> ENDPOINT_READER =
-      new JsonReaderAdapter<Endpoint>() {
-        @Override
-        public Endpoint fromJson(JsonReader reader) throws IOException {
-          Endpoint.Builder result = Endpoint.newBuilder();
-          reader.beginObject();
-          boolean readField = false;
-          while (reader.hasNext()) {
-            String nextName = reader.nextName();
-            if (reader.peekNull()) {
-              reader.skipValue();
-              continue;
-            }
-            if (nextName.equals("serviceName")) {
-              result.serviceName(reader.nextString());
-              readField = true;
-            } else if (nextName.equals("ipv4") || nextName.equals("ipv6")) {
-              result.parseIp(reader.nextString());
-              readField = true;
-            } else if (nextName.equals("port")) {
-              result.port(reader.nextInt());
-              readField = true;
-            } else {
-              reader.skipValue();
-            }
-          }
-          reader.endObject();
-          return readField ? result.build() : null;
-        }
-
-        @Override
-        public String toString() {
-          return "Endpoint";
-        }
-      };
 }

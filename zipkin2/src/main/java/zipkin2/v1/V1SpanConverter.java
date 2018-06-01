@@ -16,16 +16,65 @@ package zipkin2.v1;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
+import java.util.Map;
+import zipkin2.Annotation;
 import zipkin2.Endpoint;
 import zipkin2.Span;
 import zipkin2.Span.Kind;
 import zipkin2.internal.Nullable;
+import zipkin2.internal.V1Metadata;
 
 /**
  * Allows you to split a v1 span when necessary. This can be the case when reading merged
  * client+server spans from storage.
  */
 public final class V1SpanConverter {
+
+  public static V1Span convert(Span value) {
+    V1Metadata md = V1Metadata.parse(value);
+    V1Span.Builder result =
+        V1Span.newBuilder()
+            .traceId(value.traceId())
+            .parentId(value.parentId())
+            .id(value.id())
+            .name(value.name())
+            .debug(value.debug());
+
+    // Don't report timestamp and duration on shared spans (should be server, but not necessarily)
+    if (!Boolean.TRUE.equals(value.shared())) {
+      result.timestamp(value.timestampAsLong());
+      result.duration(value.durationAsLong());
+    }
+
+    boolean beginAnnotation = md.startTs != 0L && md.begin != null;
+    boolean endAnnotation = md.endTs != 0L && md.end != null;
+    Endpoint ep = value.localEndpoint();
+    int annotationCount = value.annotations().size();
+    if (beginAnnotation) {
+      annotationCount++;
+      result.addAnnotation(md.startTs, md.begin, ep);
+    }
+    for (int i = 0, length = value.annotations().size(); i < length; i++) {
+      Annotation a = value.annotations().get(i);
+      result.addAnnotation(a.timestamp(), a.value(), ep);
+    }
+    if (endAnnotation) {
+      annotationCount++;
+      result.addAnnotation(md.endTs, md.end, ep);
+    }
+
+    for (Map.Entry<String, String> b : value.tags().entrySet()) {
+      result.addBinaryAnnotation(b.getKey(), b.getValue(), ep);
+    }
+
+    boolean writeLocalComponent = annotationCount == 0 && ep != null && value.tags().isEmpty();
+    boolean hasRemoteEndpoint = md.addr != null && value.remoteEndpoint() != null;
+
+    // write an empty "lc" annotation to avoid missing the localEndpoint in an in-process span
+    if (writeLocalComponent) result.addBinaryAnnotation("lc", "", ep);
+    if (hasRemoteEndpoint) result.addBinaryAnnotation(md.addr, value.remoteEndpoint());
+    return result.build();
+  }
 
   public static List<Span> convert(V1Span source) {
     Builders builders = new Builders(source);

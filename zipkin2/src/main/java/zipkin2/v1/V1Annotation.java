@@ -24,6 +24,7 @@ import zipkin2.internal.Nullable;
  */
 public final class V1Annotation implements Comparable<V1Annotation> {
 
+  // exposed for conversion
   public static V1Annotation create(long timestamp, String value, @Nullable Endpoint endpoint) {
     return new V1Annotation(timestamp, value, endpoint);
   }
